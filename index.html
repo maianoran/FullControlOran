@@ -1,0 +1,1014 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Control de Caja y Turnos</title>
+  
+  <!-- FAVICON CONFIGURADO DESDE logo.png -->
+  <link rel="icon" type="image/png" href="logo.png">
+
+  <!-- PWA & ARCHIVOS LOCALES -->
+  <link rel="manifest" href="manifest.json">
+  <link rel="stylesheet" href="styles.css">
+  <script src="script.js" defer></script>
+
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body class="bg-slate-900 text-slate-100 antialiased selection:bg-cyan-500 selection:text-white">
+  <div id="root"></div>
+
+  <script type="text/babel" data-type="module">
+    // Importación de módulos de Firebase desde CDN para uso directo en navegador
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import { getAnalytics } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-analytics.js";
+    import { 
+      getFirestore, 
+      collection, 
+      onSnapshot, 
+      doc, 
+      setDoc, 
+      deleteDoc 
+    } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+    // Tu configuración oficial de Firebase Web App
+    const firebaseConfig = {
+      apiKey: "AIzaSyCrgw-ZthC3eP6E-whl0WhlLb2Q4UbHZLY",
+      authDomain: "fullcontroloran.firebaseapp.com",
+      projectId: "fullcontroloran",
+      storageBucket: "fullcontroloran.firebasestorage.app",
+      messagingSenderId: "844267183882",
+      appId: "1:844267183882:web:43ae59c798efa3be5c64f3",
+      measurementId: "G-R5Z6HSXQH6"
+    };
+
+    // Inicializar Firebase, Analytics y Firestore Database
+    const app = initializeApp(firebaseConfig);
+    const analytics = getAnalytics(app);
+    const db = getFirestore(app);
+
+    const { useState, useEffect } = React;
+
+    function App() {
+      const [users, setUsers] = useState([]);
+      const [cajas, setCajas] = useState([]);
+
+      const [currentUser, setCurrentUser] = useState(null);
+      const [screen, setScreen] = useState('login'); 
+      const [loginForm, setLoginForm] = useState({ dni: '', password: '' });
+
+      const [showLoginPassword, setShowLoginPassword] = useState(false);
+      const [showRegPassword, setShowRegPassword] = useState(false);
+      const [showRegConfirmPassword, setShowRegConfirmPassword] = useState(false);
+
+      const [regForm, setRegForm] = useState({ 
+        nombre: '', 
+        apellido: '', 
+        email: '', 
+        dni: '', 
+        celular: '', 
+        password: '',
+        confirmPassword: ''
+      });
+
+      const [editingUser, setEditingUser] = useState(null);
+      const [cajaActiva, setCajaActiva] = useState(null);
+      
+      const [ingresos, setIngresos] = useState({ efectivo: 0, mpQr: 0, appYpf: 0, posnetMp: 0 });
+      const [gastos, setGastos] = useState([]);
+      const [nuevoGastoDesc, setNuevoGastoDesc] = useState('');
+      const [nuevoGastoMonto, setNuevoGastoMonto] = useState('');
+
+      const [filtroUsuario, setFiltroUsuario] = useState('');
+      const [fechaDesde, setFechaDesde] = useState('');
+      const [fechaHasta, setFechaHasta] = useState('');
+      const [periodoAcceso, setPeriodoAcceso] = useState('todos'); 
+      const [adminSubTab, setAdminSubTab] = useState('cajas'); 
+
+      // 1. ESCUCHA EN TIEMPO REAL DE USUARIOS DESDE FIRESTORE
+      useEffect(() => {
+        const unsubUsers = onSnapshot(collection(db, "caja_users"), (snapshot) => {
+          let list = snapshot.docs.map(doc => doc.data());
+          
+          const adminData = {
+            dni: '31093372', 
+            nombre: 'Ernesto', 
+            apellido: 'Luna', 
+            email: 'admin@local.com', 
+            celular: '3878625223', 
+            role: 'admin',
+            password: 'luna2026' 
+          };
+
+          const adminIndex = list.findIndex(u => u.role === 'admin');
+          if (adminIndex !== -1) {
+            list[adminIndex] = adminData;
+          } else {
+            list.push(adminData);
+          }
+          setUsers(list);
+        });
+
+        return () => unsubUsers();
+      }, []);
+
+      // 2. ESCUCHA EN TIEMPO REAL DE CAJAS DESDE FIRESTORE
+      useEffect(() => {
+        const unsubCajas = onSnapshot(collection(db, "caja_registros"), (snapshot) => {
+          const listCajas = snapshot.docs.map(doc => doc.data());
+          listCajas.sort((a, b) => (b.timestamp || b.id) - (a.timestamp || a.id));
+          setCajas(listCajas);
+        });
+
+        return () => unsubCajas();
+      }, []);
+
+      const handleRegister = async (e) => {
+        e.preventDefault();
+        if (!regForm.dni || !regForm.nombre || !regForm.apellido || !regForm.password) {
+          alert('Por favor completá todos los campos obligatorios');
+          return;
+        }
+
+        if (regForm.password !== regForm.confirmPassword) {
+          alert('Las contraseñas ingresadas no coinciden');
+          return;
+        }
+
+        if (users.some(u => u.dni === regForm.dni.trim())) {
+          alert('El DNI ya se encuentra registrado');
+          return;
+        }
+        
+        const newUser = { 
+          nombre: regForm.nombre,
+          apellido: regForm.apellido,
+          email: regForm.email,
+          celular: regForm.celular,
+          dni: regForm.dni.trim(), 
+          password: regForm.password,
+          role: 'cajero' 
+        };
+
+        await setDoc(doc(db, "caja_users", newUser.dni), newUser);
+        setCurrentUser(newUser);
+        setScreen('cajero');
+      };
+
+      const handleLogin = (e) => {
+        e.preventDefault();
+        const user = users.find(u => u.dni === loginForm.dni.trim());
+        
+        if (!user) {
+          alert('DNI no encontrado. Verificá el número o registrate.');
+          return;
+        }
+
+        if (user.password !== loginForm.password) {
+          alert('Contraseña incorrecta.');
+          return;
+        }
+
+        setCurrentUser(user);
+        setScreen(user.role === 'admin' ? 'admin' : 'cajero');
+      };
+
+      const handleSaveUserEdit = async (e) => {
+        e.preventDefault();
+        const updatedUser = {
+          ...editingUser,
+          dni: editingUser.dni.trim()
+        };
+
+        if (editingUser.originalDni !== updatedUser.dni) {
+          await deleteDoc(doc(db, "caja_users", editingUser.originalDni));
+        }
+
+        await setDoc(doc(db, "caja_users", updatedUser.dni), updatedUser);
+        setEditingUser(null);
+        alert('Datos del cajero actualizados correctamente.');
+      };
+
+      const eliminarUsuario = async (dni) => {
+        const userToDelete = users.find(u => u.dni === dni);
+        if (userToDelete?.role === 'admin') {
+          alert('No podés eliminar la cuenta de Administrador.');
+          return;
+        }
+        if (window.confirm(`¿Estás seguro de eliminar al cajero ${userToDelete.nombre} ${userToDelete.apellido}?`)) {
+          await deleteDoc(doc(db, "caja_users", dni));
+        }
+      };
+
+      const abrirCaja = () => {
+        const ahora = new Date();
+        const nuevaCaja = {
+          id: Date.now(),
+          usuario: `${currentUser.nombre} ${currentUser.apellido}`,
+          dni: currentUser.dni,
+          fecha: ahora.toLocaleDateString('es-AR'),
+          timestamp: ahora.getTime(),
+          horaApertura: ahora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }),
+          horaCierre: null,
+          ingresos: { efectivo: 0, mpQr: 0, appYpf: 0, posnetMp: 0 },
+          gastos: [],
+          estado: 'abierta'
+        };
+        setCajaActiva(nuevaCaja);
+        setIngresos({ efectivo: 0, mpQr: 0, appYpf: 0, posnetMp: 0 });
+        setGastos([]);
+      };
+
+      const agregarGasto = () => {
+        if (!nuevoGastoDesc || !nuevoGastoMonto || parseFloat(nuevoGastoMonto) <= 0) return;
+        setGastos([...gastos, { id: Date.now(), concepto: nuevoGastoDesc, monto: parseFloat(nuevoGastoMonto) }]);
+        setNuevoGastoDesc('');
+        setNuevoGastoMonto('');
+      };
+
+      const eliminarGasto = (id) => {
+        setGastos(gastos.filter(g => g.id !== id));
+      };
+
+      const cerrarCaja = async () => {
+        const ahora = new Date();
+        const totalIngresos = Number(ingresos.efectivo) + Number(ingresos.mpQr) + Number(ingresos.appYpf) + Number(ingresos.posnetMp);
+        const totalGastos = gastos.reduce((sum, g) => sum + g.monto, 0);
+        
+        const cajaFinalizada = {
+          ...cajaActiva,
+          horaCierre: ahora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }),
+          ingresos: { ...ingresos },
+          gastos: [...gastos],
+          totalIngresos,
+          totalGastos,
+          saldoNeto: totalIngresos - totalGastos,
+          estado: 'cerrada'
+        };
+
+        await setDoc(doc(db, "caja_registros", cajaFinalizada.id.toString()), cajaFinalizada);
+        setCajaActiva(cajaFinalizada);
+        alert('Caja cerrada con éxito y sincronizada en tiempo real.');
+      };
+
+      const eliminarCaja = async (id) => {
+        const confirmar = window.confirm('¿Estás seguro de que querés eliminar esta caja? Esta acción afectará a todos los dispositivos.');
+        if (confirmar) {
+          await deleteDoc(doc(db, "caja_registros", id.toString()));
+          if (cajaActiva && cajaActiva.id === id) {
+            setCajaActiva(null);
+          }
+        }
+      };
+
+      const parseFechaCaja = (caja) => {
+        if (caja.timestamp) return new Date(caja.timestamp);
+        const partes = caja.fecha.split('/');
+        if (partes.length === 3) {
+          return new Date(partes[2], partes[1] - 1, partes[0]);
+        }
+        return new Date(caja.id);
+      };
+
+      const cajasFiltradas = cajas.filter(c => {
+        const dateCaja = parseFechaCaja(c);
+        const ahora = new Date();
+
+        const coincideUsuario = filtroUsuario 
+          ? (c.usuario.toLowerCase().includes(filtroUsuario.toLowerCase()) || c.dni.includes(filtroUsuario))
+          : true;
+
+        if (!coincideUsuario) return false;
+
+        if (fechaDesde) {
+          const dDesde = new Date(fechaDesde);
+          dDesde.setHours(0,0,0,0);
+          if (dateCaja < dDesde) return false;
+        }
+
+        if (fechaHasta) {
+          const dHasta = new Date(fechaHasta);
+          dHasta.setHours(23,59,59,999);
+          if (dateCaja > dHasta) return false;
+        }
+
+        if (!fechaDesde && !fechaHasta && periodoAcceso !== 'todos') {
+          if (periodoAcceso === 'semana') {
+            const haceSieteDias = new Date();
+            haceSieteDias.setDate(ahora.getDate() - 7);
+            haceSieteDias.setHours(0,0,0,0);
+            if (dateCaja < haceSieteDias) return false;
+          } else if (periodoAcceso === 'mes') {
+            if (dateCaja.getMonth() !== ahora.getMonth() || dateCaja.getFullYear() !== ahora.getFullYear()) {
+              return false;
+            }
+          } else if (periodoAcceso === 'anio') {
+            if (dateCaja.getFullYear() !== ahora.getFullYear()) return false;
+          }
+        }
+
+        return true;
+      });
+
+      const acumuladoMediosPago = cajasFiltradas.reduce((acc, c) => {
+        acc.efectivo += Number(c.ingresos?.efectivo || 0);
+        acc.mpQr += Number(c.ingresos?.mpQr || 0);
+        acc.appYpf += Number(c.ingresos?.appYpf || 0);
+        acc.posnetMp += Number(c.ingresos?.posnetMp || 0);
+        return acc;
+      }, { efectivo: 0, mpQr: 0, appYpf: 0, posnetMp: 0 });
+
+      const totalGeneralIngresos = cajasFiltradas.reduce((sum, c) => sum + (c.totalIngresos || 0), 0);
+      const totalGeneralGastos = cajasFiltradas.reduce((sum, c) => sum + (c.totalGastos || 0), 0);
+      const balanceNetoGeneral = totalGeneralIngresos - totalGeneralGastos;
+
+      return (
+        <div className="min-h-screen flex flex-col bg-slate-900 text-slate-100">
+          {/* Header */}
+          <header className="bg-slate-800/80 backdrop-blur border-b border-slate-700/60 text-white p-4 shadow-lg flex justify-between items-center print:hidden sticky top-0 z-50">
+            <h1 className="font-extrabold text-xl flex items-center gap-3">
+              <img src="logo.png" alt="Logo" className="h-8 w-auto object-contain drop-shadow" />
+              <span className="bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent">
+                Control de Caja
+              </span>
+            </h1>
+            {currentUser && (
+              <div className="flex items-center gap-4 text-sm">
+                <span className="bg-slate-700/60 px-3 py-1 rounded-full border border-slate-600 text-slate-300">
+                  <i className="fa-solid fa-user me-1 text-cyan-400"></i> {currentUser.nombre} <span className="text-xs uppercase font-bold text-cyan-400 ms-1">({currentUser.role})</span>
+                </span>
+                <button onClick={() => { setCurrentUser(null); setScreen('login'); setCajaActiva(null); }} className="bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 px-3 py-1 rounded-lg transition font-medium">
+                  <i className="fa-solid fa-right-from-bracket me-1"></i> Salir
+                </button>
+              </div>
+            )}
+          </header>
+
+          {/* Main Content */}
+          <main className="flex-grow p-4 max-w-5xl mx-auto w-full">
+            {/* LOGIN */}
+            {screen === 'login' && (
+              <div className="bg-slate-800 border border-slate-700 p-8 rounded-2xl shadow-2xl max-w-md mx-auto mt-12 backdrop-blur">
+                <div className="text-center mb-6">
+                  <img src="logo.png" alt="Logo" className="h-16 mx-auto mb-3 object-contain drop-shadow-md" />
+                  <h2 className="text-2xl font-bold text-slate-100">Acceso</h2>
+                  <p className="text-xs text-slate-400 mt-1">Iniciá sesión para gestionar tu turno o administración</p>
+                </div>
+
+                <form onSubmit={handleLogin} className="space-y-5">
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-2">DNI de usuario:</label>
+                    <input 
+                      type="text" 
+                      value={loginForm.dni} 
+                      onChange={e => setLoginForm({...loginForm, dni: e.target.value})} 
+                      required 
+                      className="w-full bg-slate-900/80 border border-slate-700 p-3 rounded-xl focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 outline-none transition text-slate-100 placeholder-slate-500" 
+                      placeholder="Ej: 31093372" 
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-2">Contraseña:</label>
+                    <div className="relative">
+                      <input 
+                        type={showLoginPassword ? "text" : "password"} 
+                        value={loginForm.password} 
+                        onChange={e => setLoginForm({...loginForm, password: e.target.value})} 
+                        required 
+                        className="w-full bg-slate-900/80 border border-slate-700 p-3 pr-10 rounded-xl focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 outline-none transition text-slate-100 placeholder-slate-500" 
+                        placeholder="••••••••" 
+                      />
+                      <button 
+                        type="button" 
+                        onClick={() => setShowLoginPassword(!showLoginPassword)} 
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-cyan-400 transition"
+                      >
+                        <i className={`fa-solid ${showLoginPassword ? 'fa-eye-slash' : 'fa-eye'}`}></i>
+                      </button>
+                    </div>
+                  </div>
+                  <button type="submit" className="w-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white py-3 rounded-xl font-bold shadow-lg shadow-cyan-500/20 transition duration-200">
+                    Ingresar a la Plataforma
+                  </button>
+                </form>
+
+                <div className="relative my-6">
+                  <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-slate-700"></div></div>
+                  <div className="relative flex justify-center text-xs uppercase"><span className="bg-slate-800 px-3 text-slate-400 font-semibold">O</span></div>
+                </div>
+
+                <button onClick={() => setScreen('register')} className="w-full bg-slate-900/60 hover:bg-slate-900 text-slate-300 border border-slate-700 py-3 rounded-xl font-semibold transition text-sm">
+                  Registrarse como Nuevo Cajero
+                </button>
+              </div>
+            )}
+
+            {/* REGISTRO (SOLO CAJEROS) */}
+            {screen === 'register' && (
+              <div className="bg-slate-800 border border-slate-700 p-8 rounded-2xl shadow-2xl max-w-md mx-auto mt-6">
+                <img src="logo.png" alt="Logo" className="h-12 mx-auto mb-2 object-contain" />
+                <h2 className="text-2xl font-bold mb-1 text-center text-cyan-400">Registro de Cajero</h2>
+                <p className="text-xs text-slate-400 text-center mb-6">Completá tus datos para obtener acceso al sistema</p>
+                
+                <form onSubmit={handleRegister} className="space-y-4">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-300 mb-1">Nombre:</label>
+                      <input type="text" required value={regForm.nombre} onChange={e => setRegForm({...regForm, nombre: e.target.value})} className="w-full bg-slate-900/80 border border-slate-700 p-2.5 rounded-xl text-sm outline-none focus:border-cyan-500" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-300 mb-1">Apellido:</label>
+                      <input type="text" required value={regForm.apellido} onChange={e => setRegForm({...regForm, apellido: e.target.value})} className="w-full bg-slate-900/80 border border-slate-700 p-2.5 rounded-xl text-sm outline-none focus:border-cyan-500" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">DNI:</label>
+                    <input type="text" required value={regForm.dni} onChange={e => setRegForm({...regForm, dni: e.target.value})} className="w-full bg-slate-900/80 border border-slate-700 p-2.5 rounded-xl text-sm outline-none focus:border-cyan-500" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">Correo Electrónico:</label>
+                    <input type="email" required value={regForm.email} onChange={e => setRegForm({...regForm, email: e.target.value})} className="w-full bg-slate-900/80 border border-slate-700 p-2.5 rounded-xl text-sm outline-none focus:border-cyan-500" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">Nº de Celular:</label>
+                    <input type="tel" required value={regForm.celular} onChange={e => setRegForm({...regForm, celular: e.target.value})} className="w-full bg-slate-900/80 border border-slate-700 p-2.5 rounded-xl text-sm outline-none focus:border-cyan-500" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">Crear Contraseña:</label>
+                    <div className="relative">
+                      <input 
+                        type={showRegPassword ? "text" : "password"} 
+                        required 
+                        value={regForm.password} 
+                        onChange={e => setRegForm({...regForm, password: e.target.value})} 
+                        className="w-full bg-slate-900/80 border border-slate-700 p-2.5 pr-10 rounded-xl text-sm outline-none focus:border-cyan-500" 
+                        placeholder="••••••••" 
+                      />
+                      <button 
+                        type="button" 
+                        onClick={() => setShowRegPassword(!showRegPassword)} 
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-cyan-400"
+                      >
+                        <i className={`fa-solid ${showRegPassword ? 'fa-eye-slash' : 'fa-eye'}`}></i>
+                      </button>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">Confirmar Contraseña:</label>
+                    <div className="relative">
+                      <input 
+                        type={showRegConfirmPassword ? "text" : "password"} 
+                        required 
+                        value={regForm.confirmPassword} 
+                        onChange={e => setRegForm({...regForm, confirmPassword: e.target.value})} 
+                        className="w-full bg-slate-900/80 border border-slate-700 p-2.5 pr-10 rounded-xl text-sm outline-none focus:border-cyan-500" 
+                        placeholder="••••••••" 
+                      />
+                      <button 
+                        type="button" 
+                        onClick={() => setShowRegConfirmPassword(!showRegConfirmPassword)} 
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-cyan-400"
+                      >
+                        <i className={`fa-solid ${showRegConfirmPassword ? 'fa-eye-slash' : 'fa-eye'}`}></i>
+                      </button>
+                    </div>
+                  </div>
+                  <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-500 text-white py-3 rounded-xl font-bold shadow-lg shadow-emerald-600/20 transition mt-2">
+                    Crear Cuenta y Entrar
+                  </button>
+                </form>
+                <button onClick={() => setScreen('login')} className="w-full mt-4 text-xs text-cyan-400 hover:underline text-center block">
+                  Volver al inicio de sesión
+                </button>
+              </div>
+            )}
+
+            {/* VISTA CAJERO */}
+            {screen === 'cajero' && (
+              <div>
+                {!cajaActiva ? (
+                  <div className="bg-slate-800 border border-slate-700 p-10 rounded-2xl shadow-2xl text-center max-w-md mx-auto my-12">
+                    <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 mb-6">
+                      <i className="fa-solid fa-clock text-3xl"></i>
+                    </div>
+                    <h2 className="text-2xl font-bold mb-2 text-slate-100">Apertura de Caja</h2>
+                    <p className="text-slate-400 mb-8 text-sm">Presioná el botón para iniciar tu turno y registrar tu marca de horario.</p>
+                    <button onClick={abrirCaja} className="bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white px-8 py-4 rounded-xl text-lg font-bold shadow-lg shadow-emerald-500/25 transition w-full">
+                      <i className="fa-solid fa-play me-2"></i> Abrir Caja Ahora
+                    </button>
+                  </div>
+                ) : (
+                  <div>
+                    {cajaActiva.estado === 'abierta' ? (
+                      <div className="space-y-6">
+                        <div className="bg-slate-800/90 border border-emerald-500/30 p-5 rounded-2xl shadow-xl flex justify-between items-center">
+                          <div>
+                            <p className="text-xs text-emerald-400 font-bold uppercase tracking-wider">Estado de Turno</p>
+                            <p className="font-extrabold text-xl text-slate-100 flex items-center gap-2 mt-0.5">
+                              <span className="w-3 h-3 rounded-full bg-emerald-400 animate-pulse"></span> CAJA ABIERTA
+                            </p>
+                            <p className="text-xs text-slate-400 mt-1">Ingreso: <strong className="text-slate-200">{cajaActiva.horaApertura} hs</strong> | Fecha: <strong className="text-slate-200">{cajaActiva.fecha}</strong></p>
+                          </div>
+                          <button onClick={cerrarCaja} className="bg-rose-600 hover:bg-rose-500 text-white px-5 py-2.5 rounded-xl font-bold shadow-lg shadow-rose-600/20 text-sm transition">
+                            <i className="fa-solid fa-lock me-1.5"></i> Cerrar Caja
+                          </button>
+                        </div>
+
+                        {/* Ingresos */}
+                        <div className="bg-slate-800 border border-slate-700 p-6 rounded-2xl shadow-xl">
+                          <h3 className="font-bold text-lg mb-4 text-emerald-400 border-b border-slate-700 pb-3 flex items-center gap-2">
+                            <i className="fa-solid fa-money-bill-wave"></i> Cargar Ingresos
+                          </h3>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                              <label className="block text-xs font-semibold text-slate-300 mb-1">Efectivo ($):</label>
+                              <input type="number" min="0" value={ingresos.efectivo} onChange={e => setIngresos({...ingresos, efectivo: e.target.value})} className="w-full bg-slate-900 border border-slate-700 p-3 rounded-xl focus:border-emerald-500 outline-none text-emerald-400 font-mono font-bold" />
+                            </div>
+                            <div>
+                              <label className="block text-xs font-semibold text-slate-300 mb-1">Mercado Pago QR ($):</label>
+                              <input type="number" min="0" value={ingresos.mpQr} onChange={e => setIngresos({...ingresos, mpQr: e.target.value})} className="w-full bg-slate-900 border border-slate-700 p-3 rounded-xl focus:border-emerald-500 outline-none text-emerald-400 font-mono font-bold" />
+                            </div>
+                            <div>
+                              <label className="block text-xs font-semibold text-slate-300 mb-1">Aplicación YPF ($):</label>
+                              <input type="number" min="0" value={ingresos.appYpf} onChange={e => setIngresos({...ingresos, appYpf: e.target.value})} className="w-full bg-slate-900 border border-slate-700 p-3 rounded-xl focus:border-emerald-500 outline-none text-emerald-400 font-mono font-bold" />
+                            </div>
+                            <div>
+                              <label className="block text-xs font-semibold text-slate-300 mb-1">Posnet Mercado Pago ($):</label>
+                              <input type="number" min="0" value={ingresos.posnetMp} onChange={e => setIngresos({...ingresos, posnetMp: e.target.value})} className="w-full bg-slate-900 border border-slate-700 p-3 rounded-xl focus:border-emerald-500 outline-none text-emerald-400 font-mono font-bold" />
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Gastos */}
+                        <div className="bg-slate-800 border border-slate-700 p-6 rounded-2xl shadow-xl">
+                          <h3 className="font-bold text-lg mb-4 text-rose-400 border-b border-slate-700 pb-3 flex items-center gap-2">
+                            <i className="fa-solid fa-receipt"></i> Cargar Gastos / Egresos
+                          </h3>
+                          <div className="flex gap-2 mb-4">
+                            <input type="text" placeholder="Concepto (ej: Hielo, Limpieza)" value={nuevoGastoDesc} onChange={e => setNuevoGastoDesc(e.target.value)} className="flex-grow bg-slate-900 border border-slate-700 p-3 rounded-xl text-sm outline-none focus:border-rose-500" />
+                            <input type="number" placeholder="Monto ($)" value={nuevoGastoMonto} onChange={e => setNuevoGastoMonto(e.target.value)} className="w-32 bg-slate-900 border border-slate-700 p-3 rounded-xl text-sm outline-none focus:border-rose-500 font-mono" />
+                            <button onClick={agregarGasto} className="bg-rose-600 hover:bg-rose-500 text-white px-5 py-3 rounded-xl text-sm font-bold transition">+ Agregar</button>
+                          </div>
+                          {gastos.length > 0 && (
+                            <table className="w-full text-sm border-t border-slate-700">
+                              <thead>
+                                <tr className="text-left text-slate-400 border-b border-slate-700">
+                                  <th className="py-2.5">Concepto</th>
+                                  <th className="py-2.5 text-right">Monto</th>
+                                  <th className="py-2.5 text-center">Acción</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-700/60">
+                                {gastos.map(g => (
+                                  <tr key={g.id}>
+                                    <td className="py-2.5 text-slate-300">{g.concepto}</td>
+                                    <td className="py-2.5 text-right text-rose-400 font-mono font-bold">-${g.monto.toLocaleString()}</td>
+                                    <td className="py-2.5 text-center">
+                                      <button onClick={() => eliminarGasto(g.id)} className="text-rose-400 hover:text-rose-300 p-1"><i className="fa-solid fa-trash"></i></button>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      /* PLANILLA IMPRIMIBLE */
+                      <div className="bg-white text-slate-800 p-8 rounded-2xl shadow-2xl border border-slate-200 max-w-2xl mx-auto print:shadow-none print:border-none print:w-full">
+                        <div className="text-center border-b pb-4 mb-4">
+                          <img src="logo.png" alt="Logo" className="h-12 mx-auto mb-2 object-contain" />
+                          <h2 className="text-2xl font-bold uppercase tracking-wide text-slate-900">Planilla de Cierre de Caja</h2>
+                          <p className="text-xs text-slate-500">Comprobante oficial de turno finalizado</p>
+                        </div>
+                        <div className="grid grid-cols-2 text-sm mb-6 gap-2 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                          <div><strong>Cajero:</strong> {cajaActiva.usuario}</div>
+                          <div><strong>DNI:</strong> {cajaActiva.dni}</div>
+                          <div><strong>Fecha:</strong> {cajaActiva.fecha}</div>
+                          <div><strong>Horario:</strong> {cajaActiva.horaApertura} hs a {cajaActiva.horaCierre} hs</div>
+                        </div>
+
+                        <h4 className="font-bold border-b pb-1 mb-2 text-slate-700">Detalle de Ingresos</h4>
+                        <ul className="text-sm space-y-1 mb-4">
+                          <li className="flex justify-between"><span>Efectivo:</span> <span className="font-mono">${Number(cajaActiva.ingresos.efectivo).toLocaleString()}</span></li>
+                          <li className="flex justify-between"><span>Mercado Pago QR:</span> <span className="font-mono">${Number(cajaActiva.ingresos.mpQr).toLocaleString()}</span></li>
+                          <li className="flex justify-between"><span>App YPF:</span> <span className="font-mono">${Number(cajaActiva.ingresos.appYpf).toLocaleString()}</span></li>
+                          <li className="flex justify-between"><span>Posnet Mercado Pago:</span> <span className="font-mono">${Number(cajaActiva.ingresos.posnetMp).toLocaleString()}</span></li>
+                          <li className="flex justify-between font-bold border-t pt-1 text-base text-emerald-700"><span>TOTAL INGRESOS:</span> <span className="font-mono">${cajaActiva.totalIngresos.toLocaleString()}</span></li>
+                        </ul>
+
+                        <h4 className="font-bold border-b pb-1 mb-2 text-slate-700">Detalle de Gastos</h4>
+                        {cajaActiva.gastos.length === 0 ? <p className="text-sm text-slate-400 italic mb-4">Sin gastos registrados</p> : (
+                          <ul className="text-sm space-y-1 mb-4">
+                            {cajaActiva.gastos.map(g => (
+                              <li key={g.id} className="flex justify-between"><span>{g.concepto}:</span> <span className="text-rose-600 font-mono">-${g.monto.toLocaleString()}</span></li>
+                            ))}
+                            <li className="flex justify-between font-bold border-t pt-1 text-base text-rose-700"><span>TOTAL GASTOS:</span> <span className="font-mono">-${cajaActiva.totalGastos.toLocaleString()}</span></li>
+                          </ul>
+                        )}
+
+                        <div className="bg-slate-900 text-white p-4 rounded-xl text-right mb-6">
+                          <span className="text-xs text-slate-400 block uppercase">Balance Final (Neto en Caja)</span>
+                          <span className="text-2xl font-black font-mono text-cyan-400">${cajaActiva.saldoNeto.toLocaleString()}</span>
+                        </div>
+
+                        <div className="pt-12 grid grid-cols-2 gap-8 text-center text-xs text-slate-500">
+                          <div className="border-t border-slate-300 pt-2">Firma del Cajero</div>
+                          <div className="border-t border-slate-300 pt-2">Firma / Sello Encargado</div>
+                        </div>
+
+                        <div className="mt-8 flex gap-4 print:hidden">
+                          <button onClick={() => window.print()} className="flex-1 bg-cyan-600 hover:bg-cyan-500 text-white py-3 rounded-xl font-bold transition">
+                            <i className="fa-solid fa-print me-2"></i> Imprimir / Guardar PDF
+                          </button>
+                          <button onClick={() => setCajaActiva(null)} className="bg-slate-200 text-slate-800 px-5 py-3 rounded-xl font-bold hover:bg-slate-300 transition">
+                            Nuevo Turno
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* PANEL ADMIN */}
+            {screen === 'admin' && (
+              <div className="space-y-6">
+                <div className="flex justify-between items-center border-b border-slate-800 pb-4 print:hidden">
+                  <h2 className="text-2xl font-bold text-slate-100 flex items-center gap-2">
+                    <i className="fa-solid fa-user-shield text-cyan-400"></i> Panel Administrador
+                  </h2>
+                  
+                  <div className="flex bg-slate-800 p-1 rounded-xl text-sm font-semibold border border-slate-700">
+                    <button 
+                      onClick={() => setAdminSubTab('cajas')} 
+                      className={`px-4 py-2 rounded-lg transition ${adminSubTab === 'cajas' ? 'bg-cyan-500 text-slate-900 font-bold shadow' : 'text-slate-400 hover:text-white'}`}
+                    >
+                      <i className="fa-solid fa-cash-register me-1.5"></i> Cajas
+                    </button>
+                    <button 
+                      onClick={() => setAdminSubTab('usuarios')} 
+                      className={`px-4 py-2 rounded-lg transition ${adminSubTab === 'usuarios' ? 'bg-cyan-500 text-slate-900 font-bold shadow' : 'text-slate-400 hover:text-white'}`}
+                    >
+                      <i className="fa-solid fa-users me-1.5"></i> Cajeros ({users.filter(u=>u.role!=='admin').length})
+                    </button>
+                  </div>
+                </div>
+
+                {/* SUB-TAB: CAJAS */}
+                {adminSubTab === 'cajas' && (
+                  <div className="space-y-6">
+                    <div className="bg-slate-800 p-4 rounded-2xl border border-slate-700 flex flex-wrap items-center justify-between gap-4 print:hidden">
+                      <div className="flex items-center gap-2">
+                        <i className="fa-solid fa-calendar-days text-cyan-400"></i>
+                        <span className="text-xs font-bold text-slate-300 uppercase tracking-wider">Período de Análisis:</span>
+                      </div>
+                      <div className="flex bg-slate-900 p-1 rounded-xl text-xs font-semibold border border-slate-700 gap-1 flex-wrap">
+                        <button 
+                          onClick={() => { setPeriodoAcceso('todos'); setFechaDesde(''); setFechaHasta(''); }} 
+                          className={`px-3 py-1.5 rounded-lg transition ${periodoAcceso === 'todos' && !fechaDesde && !fechaHasta ? 'bg-cyan-500 text-slate-900 font-bold' : 'text-slate-400 hover:text-white'}`}
+                        >
+                          Histórico Total
+                        </button>
+                        <button 
+                          onClick={() => { setPeriodoAcceso('semana'); setFechaDesde(''); setFechaHasta(''); }} 
+                          className={`px-3 py-1.5 rounded-lg transition ${periodoAcceso === 'semana' && !fechaDesde && !fechaHasta ? 'bg-cyan-500 text-slate-900 font-bold' : 'text-slate-400 hover:text-white'}`}
+                        >
+                          Esta Semana
+                        </button>
+                        <button 
+                          onClick={() => { setPeriodoAcceso('mes'); setFechaDesde(''); setFechaHasta(''); }} 
+                          className={`px-3 py-1.5 rounded-lg transition ${periodoAcceso === 'mes' && !fechaDesde && !fechaHasta ? 'bg-cyan-500 text-slate-900 font-bold' : 'text-slate-400 hover:text-white'}`}
+                        >
+                          Este Mes
+                        </button>
+                        <button 
+                          onClick={() => { setPeriodoAcceso('anio'); setFechaDesde(''); setFechaHasta(''); }} 
+                          className={`px-3 py-1.5 rounded-lg transition ${periodoAcceso === 'anio' && !fechaDesde && !fechaHasta ? 'bg-cyan-500 text-slate-900 font-bold' : 'text-slate-400 hover:text-white'}`}
+                        >
+                          Este Año
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 print:hidden">
+                      <div className="bg-slate-800 p-5 rounded-2xl border border-slate-700 shadow-lg flex flex-col justify-between">
+                        <div>
+                          <p className="text-xs text-slate-400 font-bold uppercase tracking-wider">Cajas en Período</p>
+                          <p className="text-3xl font-extrabold text-cyan-400 mt-1">{cajasFiltradas.length}</p>
+                        </div>
+                        <div className="mt-4 pt-3 border-t border-slate-700/60 flex justify-between items-center text-xs text-slate-400">
+                          <span>Balance Neto Acumulado:</span>
+                          <span className={`font-mono font-bold text-sm ${balanceNetoGeneral >= 0 ? 'text-cyan-400' : 'text-rose-500'}`}>
+                            ${balanceNetoGeneral.toLocaleString()}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="bg-slate-800 p-5 rounded-2xl border border-slate-700 shadow-lg md:col-span-2 space-y-4">
+                        <div className="flex justify-between items-start border-b border-slate-700 pb-3">
+                          <div>
+                            <p className="text-xs text-slate-400 font-bold uppercase tracking-wider">Ingresos Acumulados</p>
+                            <p className="text-3xl font-extrabold text-emerald-400 mt-1 font-mono">${totalGeneralIngresos.toLocaleString()}</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-xs text-slate-400 font-bold uppercase tracking-wider">Gastos Acumulados</p>
+                            <p className="text-xl font-bold text-rose-400 mt-1 font-mono">-${totalGeneralGastos.toLocaleString()}</p>
+                          </div>
+                        </div>
+
+                        <div>
+                          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2"><i className="fa-solid fa-pie-chart me-1 text-cyan-400"></i> Desglose por Medio de Pago:</p>
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                            <div className="bg-slate-900/80 p-2.5 rounded-xl border border-slate-700/80">
+                              <span className="text-[10px] text-slate-400 uppercase font-semibold block">Efectivo</span>
+                              <span className="text-sm font-bold font-mono text-emerald-400">${acumuladoMediosPago.efectivo.toLocaleString()}</span>
+                            </div>
+                            <div className="bg-slate-900/80 p-2.5 rounded-xl border border-slate-700/80">
+                              <span className="text-[10px] text-slate-400 uppercase font-semibold block">Mercado Pago QR</span>
+                              <span className="text-sm font-bold font-mono text-cyan-400">${acumuladoMediosPago.mpQr.toLocaleString()}</span>
+                            </div>
+                            <div className="bg-slate-900/80 p-2.5 rounded-xl border border-slate-700/80">
+                              <span className="text-[10px] text-slate-400 uppercase font-semibold block">App YPF</span>
+                              <span className="text-sm font-bold font-mono text-amber-400">${acumuladoMediosPago.appYpf.toLocaleString()}</span>
+                            </div>
+                            <div className="bg-slate-900/80 p-2.5 rounded-xl border border-slate-700/80">
+                              <span className="text-[10px] text-slate-400 uppercase font-semibold block">Posnet MP</span>
+                              <span className="text-sm font-bold font-mono text-indigo-400">${acumuladoMediosPago.posnetMp.toLocaleString()}</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="bg-slate-800 p-4 rounded-2xl border border-slate-700 grid grid-cols-1 md:grid-cols-4 gap-4 items-center print:hidden">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-400 mb-1">Desde Fecha:</label>
+                        <input 
+                          type="date" 
+                          value={fechaDesde} 
+                          onChange={e => setFechaDesde(e.target.value)} 
+                          className="w-full bg-slate-900 border border-slate-700 p-2.5 rounded-xl text-xs outline-none focus:border-cyan-500 text-slate-200" 
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-400 mb-1">Hasta Fecha:</label>
+                        <input 
+                          type="date" 
+                          value={fechaHasta} 
+                          onChange={e => setFechaHasta(e.target.value)} 
+                          className="w-full bg-slate-900 border border-slate-700 p-2.5 rounded-xl text-xs outline-none focus:border-cyan-500 text-slate-200" 
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-400 mb-1">Buscar Cajero / DNI:</label>
+                        <input 
+                          type="text" 
+                          placeholder="Nombre o DNI..." 
+                          value={filtroUsuario} 
+                          onChange={e => setFiltroUsuario(e.target.value)} 
+                          className="w-full bg-slate-900 border border-slate-700 p-2.5 rounded-xl text-xs outline-none focus:border-cyan-500 text-slate-200" 
+                        />
+                      </div>
+                      <div className="flex items-end h-full">
+                        {(fechaDesde || fechaHasta || filtroUsuario || periodoAcceso !== 'todos') && (
+                          <button 
+                            onClick={() => { setFechaDesde(''); setFechaHasta(''); setFiltroUsuario(''); setPeriodoAcceso('todos'); }} 
+                            className="w-full bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 py-2.5 rounded-xl text-xs font-semibold transition"
+                          >
+                            <i className="fa-solid fa-rotate-left me-1"></i> Limpiar Filtros
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {cajaActiva && cajaActiva.estado === 'cerrada' && (
+                      <div className="bg-slate-800 p-6 rounded-2xl shadow-2xl border border-cyan-500/30 mb-6">
+                        <div className="flex justify-between items-center border-b border-slate-700 pb-3 mb-4 print:hidden">
+                          <h3 className="font-bold text-lg text-cyan-400"><i className="fa-solid fa-file-invoice-dollar me-2"></i>Detalle de Caja #{cajaActiva.id}</h3>
+                          <button onClick={() => setCajaActiva(null)} className="text-slate-400 hover:text-white font-bold text-xs bg-slate-700 px-3 py-1.5 rounded-lg">✕ Cerrar Vista</button>
+                        </div>
+
+                        <div className="bg-white text-slate-800 p-6 rounded-xl border border-slate-200">
+                          <div className="text-center border-b pb-3 mb-4">
+                            <h2 className="text-xl font-bold uppercase">Planilla de Cierre de Caja</h2>
+                            <p className="text-xs text-slate-500">Registro histórico</p>
+                          </div>
+
+                          <div className="grid grid-cols-2 text-sm mb-4 gap-2 bg-slate-50 p-3 rounded-lg border border-slate-200">
+                            <div><strong>Cajero:</strong> {cajaActiva.usuario}</div>
+                            <div><strong>DNI:</strong> {cajaActiva.dni}</div>
+                            <div><strong>Fecha:</strong> {cajaActiva.fecha}</div>
+                            <div><strong>Horario:</strong> {cajaActiva.horaApertura} hs a {cajaActiva.horaCierre} hs</div>
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                            <div className="bg-slate-50 p-3 rounded-lg border border-slate-200">
+                              <h4 className="font-bold border-b pb-1 mb-2 text-xs text-slate-700 uppercase">Ingresos</h4>
+                              <ul className="text-sm space-y-1 font-mono">
+                                <li className="flex justify-between"><span>Efectivo:</span> <span>${Number(cajaActiva.ingresos.efectivo).toLocaleString()}</span></li>
+                                <li className="flex justify-between"><span>Mercado Pago QR:</span> <span>${Number(cajaActiva.ingresos.mpQr).toLocaleString()}</span></li>
+                                <li className="flex justify-between"><span>App YPF:</span> <span>${Number(cajaActiva.ingresos.appYpf).toLocaleString()}</span></li>
+                                <li className="flex justify-between"><span>Posnet Mercado Pago:</span> <span>${Number(cajaActiva.ingresos.posnetMp).toLocaleString()}</span></li>
+                                <li className="flex justify-between font-bold border-t pt-1 text-emerald-700"><span>TOTAL INGRESOS:</span> <span>${cajaActiva.totalIngresos.toLocaleString()}</span></li>
+                              </ul>
+                            </div>
+
+                            <div className="bg-slate-50 p-3 rounded-lg border border-slate-200">
+                              <h4 className="font-bold border-b pb-1 mb-2 text-xs text-slate-700 uppercase">Gastos</h4>
+                              {cajaActiva.gastos.length === 0 ? <p className="text-sm text-slate-400 italic">Sin gastos registrados.</p> : (
+                                <ul className="text-sm space-y-1 font-mono">
+                                  {cajaActiva.gastos.map(g => (
+                                    <li key={g.id} className="flex justify-between"><span>{g.concepto}:</span> <span className="text-rose-600">-${g.monto.toLocaleString()}</span></li>
+                                  ))}
+                                  <li className="flex justify-between font-bold border-t pt-1 text-rose-700"><span>TOTAL GASTOS:</span> <span>-${cajaActiva.totalGastos.toLocaleString()}</span></li>
+                                </ul>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="bg-slate-900 text-white p-3 rounded-lg flex justify-between items-center">
+                            <span className="font-bold text-xs uppercase text-slate-300">SALDO NETO:</span>
+                            <span className="text-xl font-bold font-mono text-cyan-400">${cajaActiva.saldoNeto.toLocaleString()}</span>
+                          </div>
+                        </div>
+
+                        <div className="mt-4 flex gap-4 print:hidden">
+                          <button onClick={() => window.print()} className="flex-1 bg-cyan-600 hover:bg-cyan-500 text-white py-2.5 rounded-xl font-bold text-sm transition">
+                            <i className="fa-solid fa-print me-2"></i> Imprimir o Guardar PDF
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="bg-slate-800 rounded-2xl border border-slate-700 overflow-x-auto shadow-xl print:hidden">
+                      <table className="w-full text-sm text-left">
+                        <thead className="bg-slate-900/60 border-b border-slate-700 text-slate-400 uppercase text-xs">
+                          <tr>
+                            <th className="p-3.5"># ID</th>
+                            <th className="p-3.5">Cajero</th>
+                            <th className="p-3.5">Fecha</th>
+                            <th className="p-3.5">Horario</th>
+                            <th className="p-3.5">Ingresos</th>
+                            <th className="p-3.5">Gastos</th>
+                            <th className="p-3.5">Saldo Neto</th>
+                            <th className="p-3.5 text-center">Acciones</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-700/60">
+                          {cajasFiltradas.length === 0 ? (
+                            <tr><td colSpan="8" className="p-6 text-center text-slate-500 italic">No se encontraron cierres de caja en el período o rango seleccionado.</td></tr>
+                          ) : (
+                            cajasFiltradas.map(c => (
+                              <tr key={c.id} className="hover:bg-slate-700/40 transition">
+                                <td className="p-3.5 font-mono text-xs text-slate-500">#{c.id.toString().slice(-4)}</td>
+                                <td className="p-3.5 font-semibold text-slate-200">{c.usuario} <span className="text-xs text-slate-500 font-mono block">DNI: {c.dni}</span></td>
+                                <td className="p-3.5 text-slate-300">{c.fecha}</td>
+                                <td className="p-3.5 text-xs text-slate-400 font-mono">{c.horaApertura} - {c.horaCierre}</td>
+                                <td className="p-3.5 text-emerald-400 font-mono font-bold">${c.totalIngresos.toLocaleString()}</td>
+                                <td className="p-3.5 text-rose-400 font-mono font-bold">-${c.totalGastos.toLocaleString()}</td>
+                                <td className="p-3.5 font-bold font-mono text-cyan-400">${c.saldoNeto.toLocaleString()}</td>
+                                <td className="p-3.5 text-center">
+                                  <div className="flex justify-center gap-2">
+                                    <button 
+                                      onClick={() => setCajaActiva(c)} 
+                                      className="bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 px-2.5 py-1 rounded-lg text-xs font-semibold transition"
+                                    >
+                                      <i className="fa-solid fa-eye me-1"></i> Detalle
+                                    </button>
+                                    <button 
+                                      onClick={() => eliminarCaja(c.id)} 
+                                      className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 px-2.5 py-1 rounded-lg text-xs font-semibold transition"
+                                    >
+                                      <i className="fa-solid fa-trash me-1"></i> Eliminar
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* SUB-TAB: CAJEROS */}
+                {adminSubTab === 'usuarios' && (
+                  <div className="space-y-6">
+                    {editingUser && (
+                      <div className="bg-slate-800 p-6 rounded-2xl shadow-2xl border border-cyan-500/40">
+                        <div className="flex justify-between items-center border-b border-slate-700 pb-3 mb-4">
+                          <h3 className="font-bold text-lg text-cyan-400"><i className="fa-solid fa-user-pen me-2"></i>Editar Datos del Cajero</h3>
+                          <button onClick={() => setEditingUser(null)} className="text-slate-400 hover:text-white font-bold text-xs bg-slate-700 px-3 py-1.5 rounded-lg">✕ Cancelar</button>
+                        </div>
+                        <form onSubmit={handleSaveUserEdit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-300 mb-1">Nombre:</label>
+                            <input type="text" required value={editingUser.nombre} onChange={e => setEditingUser({...editingUser, nombre: e.target.value})} className="w-full bg-slate-900 border border-slate-700 p-2.5 rounded-xl text-sm outline-none focus:border-cyan-500 text-slate-200" />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-300 mb-1">Apellido:</label>
+                            <input type="text" required value={editingUser.apellido} onChange={e => setEditingUser({...editingUser, apellido: e.target.value})} className="w-full bg-slate-900 border border-slate-700 p-2.5 rounded-xl text-sm outline-none focus:border-cyan-500 text-slate-200" />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-300 mb-1">DNI:</label>
+                            <input type="text" required value={editingUser.dni} onChange={e => setEditingUser({...editingUser, dni: e.target.value})} className="w-full bg-slate-900 border border-slate-700 p-2.5 rounded-xl text-sm outline-none focus:border-cyan-500 text-slate-200" />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-300 mb-1">Correo Electrónico:</label>
+                            <input type="email" required value={editingUser.email} onChange={e => setEditingUser({...editingUser, email: e.target.value})} className="w-full bg-slate-900 border border-slate-700 p-2.5 rounded-xl text-sm outline-none focus:border-cyan-500 text-slate-200" />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-300 mb-1">Celular:</label>
+                            <input type="tel" required value={editingUser.celular} onChange={e => setEditingUser({...editingUser, celular: e.target.value})} className="w-full bg-slate-900 border border-slate-700 p-2.5 rounded-xl text-sm outline-none focus:border-cyan-500 text-slate-200" />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-300 mb-1">Contraseña de acceso:</label>
+                            <input type="text" required value={editingUser.password} onChange={e => setEditingUser({...editingUser, password: e.target.value})} className="w-full bg-slate-900 border border-amber-500/40 p-2.5 rounded-xl text-sm font-mono text-amber-300 outline-none" />
+                          </div>
+                          <div className="md:col-span-2 flex justify-end gap-2 mt-2">
+                            <button type="submit" className="bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-2.5 rounded-xl font-bold text-sm transition">
+                              <i className="fa-solid fa-floppy-disk me-1.5"></i> Guardar Cambios
+                            </button>
+                          </div>
+                        </form>
+                      </div>
+                    )}
+
+                    <div className="bg-slate-800 rounded-2xl border border-slate-700 overflow-x-auto shadow-xl">
+                      <table className="w-full text-sm text-left">
+                        <thead className="bg-slate-900/60 border-b border-slate-700 text-slate-400 uppercase text-xs">
+                          <tr>
+                            <th className="p-3.5">Cajero / Nombre</th>
+                            <th className="p-3.5">DNI</th>
+                            <th className="p-3.5">Contacto</th>
+                            <th className="p-3.5">Contraseña</th>
+                            <th className="p-3.5">Rol</th>
+                            <th className="p-3.5 text-center">Acciones</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-700/60">
+                          {users.map(u => (
+                            <tr key={u.dni} className="hover:bg-slate-700/40 transition">
+                              <td className="p-3.5 font-semibold text-slate-200">{u.nombre} {u.apellido}</td>
+                              <td className="p-3.5 font-mono text-xs text-slate-400">{u.dni}</td>
+                              <td className="p-3.5 text-xs text-slate-400">
+                                <div className="text-slate-300">{u.email}</div>
+                                <div>{u.celular}</div>
+                              </td>
+                              <td className="p-3.5 font-mono text-xs text-cyan-400 bg-slate-900/80 border border-slate-700 px-2.5 py-1 rounded-lg inline-block mt-1">{u.password}</td>
+                              <td className="p-3.5">
+                                <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${u.role === 'admin' ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30' : 'bg-slate-700 text-slate-300'}`}>
+                                  {u.role === 'admin' ? 'Administrador' : 'Cajero'}
+                                </span>
+                              </td>
+                              <td className="p-3.5 text-center">
+                                {u.role !== 'admin' ? (
+                                  <div className="flex justify-center gap-2">
+                                    <button 
+                                      onClick={() => setEditingUser({ ...u, originalDni: u.dni })} 
+                                      className="bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2.5 py-1 rounded-lg text-xs font-semibold transition"
+                                    >
+                                      <i className="fa-solid fa-pen me-1"></i> Editar
+                                    </button>
+                                    <button 
+                                      onClick={() => eliminarUsuario(u.dni)} 
+                                      className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 px-2.5 py-1 rounded-lg text-xs font-semibold transition"
+                                    >
+                                      <i className="fa-solid fa-user-minus me-1"></i> Eliminar
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <span className="text-xs text-slate-500 italic">Cuenta Principal</span>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </main>
+
+          <footer className="bg-slate-950/80 border-t border-slate-800 text-center py-4 px-4 text-xs text-slate-400 print:hidden mt-auto">
+            <p className="font-medium tracking-wide">
+              <span className="text-cyan-400 font-bold">MAIAN APP DESIGN</span> – Contacto 3878302425 – Orán - Salta - Argentina
+            </p>
+          </footer>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
