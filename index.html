@@ -53,6 +53,22 @@
 
     const { useState, useEffect } = React;
 
+    // Helper para obtener YYYY-MM-DD en zona horaria local
+    const getLocalISOString = (dateObj = new Date()) => {
+      const year = dateObj.getFullYear();
+      const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+      const day = String(dateObj.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+
+    // Helper para convertir YYYY-MM-DD a Date local sin desfase UTC
+    const parseISODateLocal = (isoDateStr, horaStr = '12:00') => {
+      if (!isoDateStr) return new Date();
+      const [y, m, d] = isoDateStr.split('-').map(Number);
+      const [hh, mm] = (horaStr || '12:00').split(':').map(Number);
+      return new Date(y, (m || 1) - 1, d || 1, hh || 12, mm || 0, 0);
+    };
+
     function App() {
       const [users, setUsers] = useState([]);
       const [cajas, setCajas] = useState([]);
@@ -77,6 +93,10 @@
 
       const [editingUser, setEditingUser] = useState(null);
       const [cajaActiva, setCajaActiva] = useState(null);
+
+      // Fecha seleccionada exclusivamente para carga de días posteriores/especiales por el Admin
+      const [fechaProgramadaAdmin, setFechaProgramadaAdmin] = useState(() => getLocalISOString());
+      const [cajeroAsignadoDni, setCajeroAsignadoDni] = useState('');
       
       const [ingresos, setIngresos] = useState({ efectivo: 0, mpQr: 0, appYpf: 0, posnetMp: 0 });
       const [gastos, setGastos] = useState([]);
@@ -174,6 +194,8 @@
         }
 
         setCurrentUser(user);
+        setCajeroAsignadoDni(user.dni);
+        setFechaProgramadaAdmin(getLocalISOString());
         setScreen(user.role === 'admin' ? 'admin' : 'cajero');
       };
 
@@ -204,20 +226,45 @@
         }
       };
 
-      const abrirCaja = () => {
+      // Apertura de caja: solo el admin puede elegir fecha posterior o distinta
+      const abrirCaja = (fechaOverrideISO = null) => {
+        const esAdmin = currentUser?.role === 'admin';
         const ahora = new Date();
+        const hoyISO = getLocalISOString(ahora);
+
+        const fechaISOSeleccionada = esAdmin
+          ? (fechaOverrideISO || fechaProgramadaAdmin || hoyISO)
+          : hoyISO;
+
+        if (!esAdmin && fechaOverrideISO && fechaOverrideISO !== hoyISO) {
+          alert('Solo el Administrador puede ingresar cierres de días posteriores.');
+          return;
+        }
+
+        const usuarioResponsable = esAdmin && cajeroAsignadoDni
+          ? (users.find(u => u.dni === cajeroAsignadoDni) || currentUser)
+          : currentUser;
+
+        const fechaBaseObj = parseISODateLocal(
+          fechaISOSeleccionada,
+          ahora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hour12: false })
+        );
+
         const nuevaCaja = {
           id: Date.now(),
-          usuario: `${currentUser.nombre} ${currentUser.apellido}`,
-          dni: currentUser.dni,
-          fecha: ahora.toLocaleDateString('es-AR'),
-          timestamp: ahora.getTime(),
+          usuario: `${usuarioResponsable.nombre} ${usuarioResponsable.apellido}`,
+          dni: usuarioResponsable.dni,
+          registradoPorAdmin: esAdmin,
+          fechaISO: fechaISOSeleccionada,
+          fecha: fechaBaseObj.toLocaleDateString('es-AR'),
+          timestamp: fechaBaseObj.getTime(),
           horaApertura: ahora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }),
           horaCierre: null,
           ingresos: { efectivo: 0, mpQr: 0, appYpf: 0, posnetMp: 0 },
           gastos: [],
           estado: 'abierta'
         };
+
         setCajaActiva(nuevaCaja);
         setIngresos({ efectivo: 0, mpQr: 0, appYpf: 0, posnetMp: 0 });
         setGastos([]);
@@ -235,12 +282,26 @@
       };
 
       const cerrarCaja = async () => {
+        const esAdmin = currentUser?.role === 'admin';
         const ahora = new Date();
+        const hoyISO = getLocalISOString(ahora);
+
+        // Resguardar que un cajero nunca guarde una fecha distinta a hoy
+        const fechaISOFinal = esAdmin
+          ? (cajaActiva.fechaISO || fechaProgramadaAdmin || hoyISO)
+          : hoyISO;
+
+        const horaCierreStr = ahora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hour12: false });
+        const fechaObjetoFinal = parseISODateLocal(fechaISOFinal, horaCierreStr);
+
         const totalIngresos = Number(ingresos.efectivo) + Number(ingresos.mpQr) + Number(ingresos.appYpf) + Number(ingresos.posnetMp);
         const totalGastos = gastos.reduce((sum, g) => sum + g.monto, 0);
         
         const cajaFinalizada = {
           ...cajaActiva,
+          fechaISO: fechaISOFinal,
+          fecha: fechaObjetoFinal.toLocaleDateString('es-AR'),
+          timestamp: fechaObjetoFinal.getTime(),
           horaCierre: ahora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }),
           ingresos: { ...ingresos },
           gastos: [...gastos],
@@ -255,6 +316,67 @@
         alert('Caja cerrada con éxito y sincronizada en tiempo real.');
       };
 
+      // Cierre directo de día posterior/programado desde el Panel Admin
+      const guardarCierreDiaPosteriorAdmin = async (e) => {
+        e.preventDefault();
+        if (currentUser?.role !== 'admin') {
+          alert('Acceso denegado: solo el Administrador puede ingresar cierres de días posteriores.');
+          return;
+        }
+
+        const hoyISO = getLocalISOString();
+        if (!fechaProgramadaAdmin) {
+          alert('Seleccioná una fecha válida.');
+          return;
+        }
+
+        if (fechaProgramadaAdmin <= hoyISO) {
+          const confirmarHoy = window.confirm('La fecha seleccionada no es posterior al día de hoy. ¿Deseás registrar este cierre de todas formas?');
+          if (!confirmarHoy) return;
+        }
+
+        const usuarioResponsable = users.find(u => u.dni === cajeroAsignadoDni) || currentUser;
+        const ahora = new Date();
+        const horaActual = ahora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hour12: false });
+        const fechaObj = parseISODateLocal(fechaProgramadaAdmin, horaActual);
+
+        const totalIngresos = Number(ingresos.efectivo || 0) + Number(ingresos.mpQr || 0) + Number(ingresos.appYpf || 0) + Number(ingresos.posnetMp || 0);
+        const totalGastos = gastos.reduce((sum, g) => sum + g.monto, 0);
+        const nuevoId = Date.now();
+
+        const cierrePosterior = {
+          id: nuevoId,
+          usuario: `${usuarioResponsable.nombre} ${usuarioResponsable.apellido}`,
+          dni: usuarioResponsable.dni,
+          registradoPorAdmin: true,
+          cierreDiaPosterior: fechaProgramadaAdmin > hoyISO,
+          fechaISO: fechaProgramadaAdmin,
+          fecha: fechaObj.toLocaleDateString('es-AR'),
+          timestamp: fechaObj.getTime(),
+          horaApertura: '08:00',
+          horaCierre: ahora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }),
+          ingresos: {
+            efectivo: Number(ingresos.efectivo || 0),
+            mpQr: Number(ingresos.mpQr || 0),
+            appYpf: Number(ingresos.appYpf || 0),
+            posnetMp: Number(ingresos.posnetMp || 0)
+          },
+          gastos: [...gastos],
+          totalIngresos,
+          totalGastos,
+          saldoNeto: totalIngresos - totalGastos,
+          estado: 'cerrada'
+        };
+
+        await setDoc(doc(db, "caja_registros", nuevoId.toString()), cierrePosterior);
+        setIngresos({ efectivo: 0, mpQr: 0, appYpf: 0, posnetMp: 0 });
+        setGastos([]);
+        setNuevoGastoDesc('');
+        setNuevoGastoMonto('');
+        setCajaActiva(cierrePosterior);
+        alert(`Cierre de caja registrado para la fecha ${cierrePosterior.fecha}.`);
+      };
+
       const eliminarCaja = async (id) => {
         const confirmar = window.confirm('¿Estás seguro de que querés eliminar esta caja? Esta acción afectará a todos los dispositivos.');
         if (confirmar) {
@@ -266,6 +388,7 @@
       };
 
       const parseFechaCaja = (caja) => {
+        if (caja.fechaISO) return parseISODateLocal(caja.fechaISO, '12:00');
         if (caja.timestamp) return new Date(caja.timestamp);
         const partes = caja.fecha.split('/');
         if (partes.length === 3) {
@@ -285,13 +408,13 @@
         if (!coincideUsuario) return false;
 
         if (fechaDesde) {
-          const dDesde = new Date(fechaDesde);
+          const dDesde = parseISODateLocal(fechaDesde, '00:00');
           dDesde.setHours(0,0,0,0);
           if (dateCaja < dDesde) return false;
         }
 
         if (fechaHasta) {
-          const dHasta = new Date(fechaHasta);
+          const dHasta = parseISODateLocal(fechaHasta, '23:59');
           dHasta.setHours(23,59,59,999);
           if (dateCaja > dHasta) return false;
         }
@@ -325,6 +448,8 @@
       const totalGeneralIngresos = cajasFiltradas.reduce((sum, c) => sum + (c.totalIngresos || 0), 0);
       const totalGeneralGastos = cajasFiltradas.reduce((sum, c) => sum + (c.totalGastos || 0), 0);
       const balanceNetoGeneral = totalGeneralIngresos - totalGeneralGastos;
+
+      const hoyISOActual = getLocalISOString();
 
       return (
         <div className="min-h-screen flex flex-col bg-slate-900 text-slate-100">
@@ -496,8 +621,8 @@
                       <i className="fa-solid fa-clock text-3xl"></i>
                     </div>
                     <h2 className="text-2xl font-bold mb-2 text-slate-100">Apertura de Caja</h2>
-                    <p className="text-slate-400 mb-8 text-sm">Presioná el botón para iniciar tu turno y registrar tu marca de horario.</p>
-                    <button onClick={abrirCaja} className="bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white px-8 py-4 rounded-xl text-lg font-bold shadow-lg shadow-emerald-500/25 transition w-full">
+                    <p className="text-slate-400 mb-8 text-sm">Presioná el botón para iniciar tu turno del día de hoy y registrar tu marca de horario.</p>
+                    <button onClick={() => abrirCaja()} className="bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white px-8 py-4 rounded-xl text-lg font-bold shadow-lg shadow-emerald-500/25 transition w-full">
                       <i className="fa-solid fa-play me-2"></i> Abrir Caja Ahora
                     </button>
                   </div>
@@ -637,19 +762,25 @@
             )}
 
             {/* PANEL ADMIN */}
-            {screen === 'admin' && (
+            {screen === 'admin' && currentUser?.role === 'admin' && (
               <div className="space-y-6">
-                <div className="flex justify-between items-center border-b border-slate-800 pb-4 print:hidden">
+                <div className="flex flex-wrap justify-between items-center gap-3 border-b border-slate-800 pb-4 print:hidden">
                   <h2 className="text-2xl font-bold text-slate-100 flex items-center gap-2">
                     <i className="fa-solid fa-user-shield text-cyan-400"></i> Panel Administrador
                   </h2>
                   
-                  <div className="flex bg-slate-800 p-1 rounded-xl text-sm font-semibold border border-slate-700">
+                  <div className="flex bg-slate-800 p-1 rounded-xl text-sm font-semibold border border-slate-700 flex-wrap gap-1">
                     <button 
                       onClick={() => setAdminSubTab('cajas')} 
                       className={`px-4 py-2 rounded-lg transition ${adminSubTab === 'cajas' ? 'bg-cyan-500 text-slate-900 font-bold shadow' : 'text-slate-400 hover:text-white'}`}
                     >
                       <i className="fa-solid fa-cash-register me-1.5"></i> Cajas
+                    </button>
+                    <button 
+                      onClick={() => setAdminSubTab('cierre_posterior')} 
+                      className={`px-4 py-2 rounded-lg transition ${adminSubTab === 'cierre_posterior' ? 'bg-amber-400 text-slate-900 font-bold shadow' : 'text-slate-400 hover:text-white'}`}
+                    >
+                      <i className="fa-solid fa-calendar-plus me-1.5"></i> Cierre Día Posterior
                     </button>
                     <button 
                       onClick={() => setAdminSubTab('usuarios')} 
@@ -659,6 +790,117 @@
                     </button>
                   </div>
                 </div>
+
+                {/* SUB-TAB EXCLUSIVO ADMIN: INGRESAR CIERRE DE DÍA POSTERIOR */}
+                {adminSubTab === 'cierre_posterior' && (
+                  <div className="bg-slate-800 border border-amber-500/30 p-6 rounded-2xl shadow-2xl space-y-6 print:hidden">
+                    <div className="border-b border-slate-700 pb-4">
+                      <span className="inline-block text-[11px] font-bold uppercase tracking-wider bg-amber-500/15 text-amber-300 border border-amber-500/30 px-2.5 py-0.5 rounded-full mb-2">
+                        Permiso Exclusivo Administrador
+                      </span>
+                      <h3 className="text-xl font-bold text-slate-100 flex items-center gap-2">
+                        <i className="fa-solid fa-calendar-check text-amber-400"></i> Registrar Cierre de Caja de Día Posterior
+                      </h3>
+                      <p className="text-xs text-slate-400 mt-1">
+                        Seleccioná una fecha posterior al día de hoy (<span className="font-mono text-slate-300">{hoyISOActual}</span>), asigná el cajero responsable y cargá ingresos y gastos.
+                      </p>
+                    </div>
+
+                    <form onSubmit={guardarCierreDiaPosteriorAdmin} className="space-y-6">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-bold uppercase tracking-wider text-amber-300 mb-1.5">
+                            Fecha del Cierre (Día Posterior):
+                          </label>
+                          <input
+                            type="date"
+                            min={hoyISOActual}
+                            required
+                            value={fechaProgramadaAdmin}
+                            onChange={e => setFechaProgramadaAdmin(e.target.value)}
+                            className="w-full bg-slate-900 border border-amber-500/40 p-3 rounded-xl text-sm text-slate-100 outline-none focus:border-amber-400 font-mono"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+                            Cajero / Responsable del Turno:
+                          </label>
+                          <select
+                            value={cajeroAsignadoDni || currentUser.dni}
+                            onChange={e => setCajeroAsignadoDni(e.target.value)}
+                            className="w-full bg-slate-900 border border-slate-700 p-3 rounded-xl text-sm text-slate-100 outline-none focus:border-cyan-500"
+                          >
+                            {users.map(u => (
+                              <option key={u.dni} value={u.dni}>
+                                {u.nombre} {u.apellido} (DNI: {u.dni}) {u.role === 'admin' ? '- Admin' : ''}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      <div className="bg-slate-900/60 border border-slate-700 p-5 rounded-2xl">
+                        <h4 className="font-bold text-sm uppercase tracking-wider text-emerald-400 mb-3">
+                          <i className="fa-solid fa-money-bill-wave me-1.5"></i> Ingresos del Día Seleccionado
+                        </h4>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+                          <div>
+                            <label className="block text-xs text-slate-400 mb-1">Efectivo ($):</label>
+                            <input type="number" min="0" step="0.01" value={ingresos.efectivo} onChange={e => setIngresos({...ingresos, efectivo: e.target.value})} className="w-full bg-slate-800 border border-slate-700 p-2.5 rounded-xl text-emerald-400 font-mono font-bold outline-none focus:border-emerald-500" />
+                          </div>
+                          <div>
+                            <label className="block text-xs text-slate-400 mb-1">Mercado Pago QR ($):</label>
+                            <input type="number" min="0" step="0.01" value={ingresos.mpQr} onChange={e => setIngresos({...ingresos, mpQr: e.target.value})} className="w-full bg-slate-800 border border-slate-700 p-2.5 rounded-xl text-emerald-400 font-mono font-bold outline-none focus:border-emerald-500" />
+                          </div>
+                          <div>
+                            <label className="block text-xs text-slate-400 mb-1">App YPF ($):</label>
+                            <input type="number" min="0" step="0.01" value={ingresos.appYpf} onChange={e => setIngresos({...ingresos, appYpf: e.target.value})} className="w-full bg-slate-800 border border-slate-700 p-2.5 rounded-xl text-emerald-400 font-mono font-bold outline-none focus:border-emerald-500" />
+                          </div>
+                          <div>
+                            <label className="block text-xs text-slate-400 mb-1">Posnet MP ($):</label>
+                            <input type="number" min="0" step="0.01" value={ingresos.posnetMp} onChange={e => setIngresos({...ingresos, posnetMp: e.target.value})} className="w-full bg-slate-800 border border-slate-700 p-2.5 rounded-xl text-emerald-400 font-mono font-bold outline-none focus:border-emerald-500" />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="bg-slate-900/60 border border-slate-700 p-5 rounded-2xl">
+                        <h4 className="font-bold text-sm uppercase tracking-wider text-rose-400 mb-3">
+                          <i className="fa-solid fa-receipt me-1.5"></i> Gastos / Egresos del Día Seleccionado
+                        </h4>
+                        <div className="flex flex-col sm:flex-row gap-2 mb-3">
+                          <input type="text" placeholder="Concepto del gasto" value={nuevoGastoDesc} onChange={e => setNuevoGastoDesc(e.target.value)} className="flex-grow bg-slate-800 border border-slate-700 p-2.5 rounded-xl text-sm outline-none focus:border-rose-500" />
+                          <input type="number" min="0" step="0.01" placeholder="Monto ($)" value={nuevoGastoMonto} onChange={e => setNuevoGastoMonto(e.target.value)} className="sm:w-36 bg-slate-800 border border-slate-700 p-2.5 rounded-xl text-sm outline-none focus:border-rose-500 font-mono" />
+                          <button type="button" onClick={agregarGasto} className="bg-rose-600 hover:bg-rose-500 text-white px-4 py-2.5 rounded-xl text-sm font-bold transition">
+                            + Agregar Gasto
+                          </button>
+                        </div>
+
+                        {gastos.length > 0 && (
+                          <div className="space-y-1.5 text-sm">
+                            {gastos.map(g => (
+                              <div key={g.id} className="flex justify-between items-center bg-slate-800 px-3 py-2 rounded-lg border border-slate-700/70">
+                                <span className="text-slate-300">{g.concepto}</span>
+                                <div className="flex items-center gap-3">
+                                  <span className="font-mono font-bold text-rose-400">-${g.monto.toLocaleString()}</span>
+                                  <button type="button" onClick={() => eliminarGasto(g.id)} className="text-rose-400 hover:text-rose-300">
+                                    <i className="fa-solid fa-trash"></i>
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex justify-end">
+                        <button type="submit" className="bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-slate-950 font-extrabold px-6 py-3 rounded-xl shadow-lg transition">
+                          <i className="fa-solid fa-floppy-disk me-2"></i> Guardar Cierre de Día Posterior
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                )}
 
                 {/* SUB-TAB: CAJAS */}
                 {adminSubTab === 'cajas' && (
@@ -868,7 +1110,12 @@
                               <tr key={c.id} className="hover:bg-slate-700/40 transition">
                                 <td className="p-3.5 font-mono text-xs text-slate-500">#{c.id.toString().slice(-4)}</td>
                                 <td className="p-3.5 font-semibold text-slate-200">{c.usuario} <span className="text-xs text-slate-500 font-mono block">DNI: {c.dni}</span></td>
-                                <td className="p-3.5 text-slate-300">{c.fecha}</td>
+                                <td className="p-3.5 text-slate-300">
+                                  {c.fecha}
+                                  {c.registradoPorAdmin && (
+                                    <span className="block text-[10px] text-amber-400 font-semibold">Cargado por Admin</span>
+                                  )}
+                                </td>
                                 <td className="p-3.5 text-xs text-slate-400 font-mono">{c.horaApertura} - {c.horaCierre}</td>
                                 <td className="p-3.5 text-emerald-400 font-mono font-bold">${c.totalIngresos.toLocaleString()}</td>
                                 <td className="p-3.5 text-rose-400 font-mono font-bold">-${c.totalGastos.toLocaleString()}</td>
